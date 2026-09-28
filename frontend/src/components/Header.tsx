@@ -62,7 +62,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="brand-mark"><Zap className="w-4 h-4" /></div>
         <div>
           <div className="flex items-center gap-2.5">
-            <h1 className="brand-title">Log anomaly</h1>
+            <h1 className="brand-title">Log Pulse</h1>
             <span className="version-mark">v2.0</span>
           </div>
           <p className="brand-meta">Real-time service observability</p>

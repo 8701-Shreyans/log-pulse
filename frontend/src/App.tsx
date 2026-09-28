@@ -74,7 +74,7 @@ export const App: React.FC = () => {
       />
 
       <footer className="site-footer">
-        <div className="footer-brand">Log anomaly detector · adaptive baseline</div>
+        <div className="footer-brand">Log Pulse · adaptive baseline</div>
         <div className="footer-meta">
           <span>Publish mode <strong>{config?.publish_mode ?? 'DRY_RUN'}</strong></span>
           <span>Window <strong>{config?.window_seconds ?? 60}s</strong></span>

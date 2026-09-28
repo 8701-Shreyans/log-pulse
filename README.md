@@ -1,172 +1,207 @@
-# ⚡ Real-Time Log Anomaly Detector with Alert Feed
+# Real-Time Log Anomaly Detector
 
-A production-grade, high-throughput log anomaly detection system and live React operations dashboard with AWS CloudWatch Logs and SNS integration.
+A real-time log monitoring and anomaly detection project with a live dashboard. The included simulator writes realistic application-style logs at a normal error rate of about 2%, and can inject spikes, gradual ramps, traffic floods, or outages to exercise the detector.
 
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-green)
-![React](https://img.shields.io/badge/React-18-cyan)
-![Vite](https://img.shields.io/badge/Vite-5-purple)
-![Tailwind](https://img.shields.io/badge/Tailwind-3-38bdf8)
-![Recharts](https://img.shields.io/badge/Recharts-2-indigo)
+The backend tails a growing log file, parses and aggregates events, learns a baseline, detects unusual error rates, and streams metrics and alerts to the dashboard. Alerts can be printed locally or published to AWS CloudWatch Logs and SNS.
 
----
+## Features
 
-## ⚡ 5-Line Quick Start
+- **File tailing and parsing:** follows a log file as it grows, handles truncation and rotation, and parses supported text and JSON formats.
+- **Rolling metrics:** tracks event and error counts, error rate, throughput, and common error signatures in a time-based window.
+- **Adaptive baseline:** learns normal behavior during warm-up; combines EWMA tracking with robust median/MAD statistics and avoids updating during active anomalies.
+- **Anomaly alerts:** applies sample-reliability and absolute-rate guards, severity thresholds, confirmation ticks, cooldowns, acknowledgement, and resolution behavior.
+- **Live dashboard:** displays metrics, baseline, telemetry, alert history, and recent log events using WebSockets with polling fallback.
+- **Scenario simulator:** produces application-style logs and supports normal, spike, ramp, flood, outage, and flapping scenarios.
+- **Optional publishing:** defaults to local dry-run output; AWS mode can publish alerts to CloudWatch Logs and SNS.
+- **Docker Compose:** runs the backend, simulator, and frontend together.
 
-**Windows (PowerShell) — three terminals from the repo root:**
+## Requirements
+
+- Python 3.11 or later
+- Node.js 20 or later and npm
+- Git (for cloning)
+- Docker Desktop, if using the container setup
+
+## Run locally on Windows
+
+### 1. Install dependencies
+
+Open PowerShell in the repository root:
 
 ```powershell
-pip install -r backend/requirements.txt
-cd frontend; npm install; cd ..
-pytest
+python -m pip install -r backend/requirements.txt
+Set-Location frontend
+npm install
+Set-Location ..
+```
 
-# Terminal 1 — API
-$env:PYTHONPATH="backend"
+### 2. Start the backend
+
+In a PowerShell terminal from the repository root:
+
+```powershell
+$env:PYTHONPATH = "backend"
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-# Terminal 2 — log generator
+The API is available at `http://localhost:8000`; interactive API documentation is at `http://localhost:8000/docs`.
+
+### 3. Start the simulator
+
+In a second PowerShell terminal from the repository root:
+
+```powershell
 python -m backend.simulator.generate_logs --file ./data/app.log --rps 30
-
-# Terminal 3 — dashboard
-cd frontend; npm run dev
 ```
 
-Or run `.\start.ps1` to launch all three processes.
+The simulator appends logs to `data/app.log`. Normal traffic has a 2% error ratio by default. Keep this process running while using the dashboard.
 
-Open **`http://localhost:5173`**. Wait until **Learned Baseline** shows *EWMA Tracking Active*, then click **Inject Spike**.
+### 4. Start the dashboard
 
----
+In a third PowerShell terminal:
 
-## 🏛️ Architecture Overview
-
-```
-┌────────────────┐   appends lines    ┌───────────────────────────────────────────────────────────┐
-│ Log Generator  │ ─────────────────► │                     data/app.log                          │
-│ (simulator.py) │                    └───────────────┬───────────────────────────────────────────┘
-└────────────────┘                                    │ tail (offset polling, rotation-safe)
-        ▲                                             ▼
-        │ POST /api/sim/*        ┌──────────────────────────────────────────────┐
-        │ (trigger anomaly)      │               BACKEND (FastAPI, asyncio)     │
-        │                        │                                              │
-┌───────┴────────┐               │  Tailer ─► Parser ─► SlidingWindow           │
-│ React Frontend │ ◄── WS /ws ───│                          │                   │
-│  (Vite + TS)   │ ◄── REST ─────│                          ▼                   │
-│  - Live chart  │               │            Baseline (EWMA mean/std)          │
-│  - Alert feed  │               │                          │                   │
-│  - Log tail    │               │                          ▼                   │
-└────────────────┘               │           Detector (z-score + rules)         │
-                                 │                          │                   │
-                                 │                          ▼                   │
-                                 │      AlertManager (dedupe, lifecycle,        │
-                                 │      cooldown, escalation)                   │
-                                 │         │                │                   │
-                                 │         ▼                ▼                   │
-                                 │  Event Bus ──► WS broadcaster / poll buffer  │
-                                 │         │                                    │
-                                 │         ▼                                    │
-                                 │  Publisher Queue ─► CloudWatch Logs          │
-                                 │  (async, retry)  └► SNS Topic ─► email/SMS   │
-                                 └──────────────────────────────────────────────┘
+```powershell
+Set-Location frontend
+npm run dev
 ```
 
----
+Open `http://localhost:5173`. Allow the baseline to finish its warm-up before testing an anomaly. Use the dashboard's **Inject spike**, **Recover**, and scenario menu controls to trigger and clear simulated conditions.
 
-## 🚀 Key System Features
+### Optional: Windows launcher
 
-| Requirement | Implementation | Description |
-|---|---|---|
-| **R1: Growing File Tailer** | `backend/app/tailer.py` | Async tailer surviving log rotation & file truncation; byte offset tracking, partial line buffering, non-blocking chunk reading. |
-| **R2: Rolling Error Rate** | `backend/app/window.py` | 1-second bucketed ring buffer with $O(\text{window})$ memory and $O(1)$ updates. Aggregates error rate, errors/sec, and root-cause error signatures. |
-| **R3: Adaptive Baseline** | `backend/app/baseline.py` | Warm-up gating ($N$ samples) + EWMA mean & variance updating. Freezes updates during anomalies to prevent baseline poisoning. Persisted to `data/baseline.json`. |
-| **R4: Statistical Deviation** | `backend/app/detector.py` | Z-score anomaly detector ($z = \frac{\text{rate} - \mu}{\sigma}$) with 5% absolute rate noise floor (`MIN_ABS_RATE`) and sample density reliability guard. |
-| **R5: Severity Levels** | `backend/app/detector.py` | LOW ($z \ge 3.0$), MEDIUM ($z \ge 4.5$), HIGH ($z \ge 6.5$), CRITICAL ($z \ge 9.0$ or rate $\ge 50\%$). |
-| **R6: Real-time UI** | `frontend/src/` | React 18 + Vite + Tailwind dashboard with WebSocket streaming, auto-reconnect, and 2-second REST polling fallback. |
-| **R7: Live Alert Feed** | `frontend/src/components/AlertFeed.tsx` | Slide-in alerts, color-coded badges, top error signatures, CloudWatch/SNS delivery indicators, and acknowledgement actions. |
-| **R8: AWS Integration** | `backend/app/publishers/` | CloudWatch Logs structured logging + SNS notifications with exponential backoff retries (1s, 2s, 4s). Dry-run mode for local operation. |
+From the repository root, run:
 
----
-
-## 🎬 3-Minute Demo Walkthrough Script
-
-1. **(0:00 - Baseline State):**
-   Open dashboard at `http://localhost:5173`. Point out the live telemetry chart with the cyan error rate line hovering inside the shaded purple $\pm 3\sigma$ baseline band (~2.0% normal error rate).
-2. **(0:30 - Anomaly Injection):**
-   Click the top-right button **`Inject Spike (60%)`** or choose **`Severe Spike`** from the dropdown menu.
-3. **(0:45 - Alert Detection & Escalation):**
-   Watch the chart climb sharply. Within 2 ticks, an alert card slides in:
-   - Severity: **MEDIUM ➔ HIGH ➔ CRITICAL**
-   - Z-score: **15.4σ**
-   - Top Root Cause: `"DB connection timeout for tx_<NUM> ×142"`
-   - Web Audio chime alerts the engineer.
-4. **(1:15 - AWS Verification):**
-   Switch to AWS CloudWatch Logs or check the SNS email notification matching the exact JSON payload.
-5. **(1:45 - Auto-Resolution):**
-   Click **`Recover`**. The generator restores normal 2% traffic. After 3 calm ticks, the alert auto-resolves with duration and peak severity recorded. The baseline was frozen during the spike and remains clean (~2.0%).
-6. **(2:15 - Connection Resilience):**
-   Stop the backend to observe the UI pill transition to **`RECONNECTING ➔ FALLBACK (Polling)`**. Restart the backend and watch it recover instantly without refreshing the page.
-
----
-
-## 🛠️ Configuration Options (`.env`)
-
-| Key | Default | Description |
-|---|---|---|
-| `LOG_FILE_PATH` | `./data/app.log` | Path to monitored log file |
-| `WINDOW_SECONDS` | `60` | Sliding window duration in seconds |
-| `EVAL_INTERVAL_SEC` | `2.0` | Metric evaluation frequency |
-| `BASELINE_WARMUP_SAMPLES` | `24` | Samples needed before detection activates |
-| `Z_LOW` / `Z_MEDIUM` / `Z_HIGH` / `Z_CRITICAL` | `3.0` / `4.5` / `6.5` / `9.0` | Z-score severity thresholds |
-| `MIN_ABS_RATE` | `0.05` | Minimum absolute error rate (5%) before alerting |
-| `CONFIRM_TICKS` | `2` | Consecutive breaching ticks to open alert |
-| `RESOLVE_TICKS` | `3` | Consecutive calm ticks to resolve alert |
-| `ALERT_COOLDOWN_SEC` | `60.0` | Minimum cooldown before re-alerting (flap guard) |
-| `PUBLISH_MODE` | `dry_run` | `dry_run` (stdout) or `aws` (CloudWatch/SNS) |
-| `CW_LOG_GROUP` / `CW_LOG_STREAM` | `/hackathon/...` | Target CloudWatch Log destination |
-| `SNS_TOPIC_ARN` | `arn:aws:sns:...` | Target SNS Topic ARN |
-
----
-
-## 🧪 Automated Test Suite
-
-```bash
-# Run all unit, moto mock, and end-to-end integration tests
-pytest -v
+```powershell
+.\start.ps1
 ```
 
-```
-============================= test session starts =============================
-backend/tests/test_alerts.py::test_alert_lifecycle_and_confirm_ticks PASSED
-backend/tests/test_alerts.py::test_alert_acknowledgement PASSED
-backend/tests/test_baseline.py::test_baseline_warmup_gating PASSED
-backend/tests/test_baseline.py::test_baseline_ewma_updates_and_std_floor PASSED
-backend/tests/test_baseline.py::test_baseline_persistence PASSED
-backend/tests/test_detector.py::test_detector_normal PASSED
-backend/tests/test_detector.py::test_detector_absolute_rate_floor PASSED
-backend/tests/test_detector.py::test_detector_severity_boundaries PASSED
-backend/tests/test_e2e.py::test_e2e_pipeline_and_alerting PASSED
-backend/tests/test_parser.py::test_parse_json_line PASSED
-backend/tests/test_parser.py::test_parse_text_kv_line PASSED
-backend/tests/test_parser.py::test_parse_text_standard_bracket_line PASSED
-backend/tests/test_parser.py::test_level_normalization PASSED
-backend/tests/test_parser.py::test_error_normalization_signature PASSED
-backend/tests/test_parser.py::test_malformed_lines_handled_gracefully PASSED
-backend/tests/test_publishers.py::test_cloudwatch_publisher PASSED
-backend/tests/test_publishers.py::test_sns_publisher PASSED
-backend/tests/test_window.py::test_window_bucketed_addition_and_snapshot PASSED
-backend/tests/test_window.py::test_window_eviction_after_window_seconds PASSED
-backend/tests/test_window.py::test_window_service_breakdown PASSED
-============================= 20 passed in 5.23s ==============================
-```
+The launcher installs missing dependencies and opens the backend, simulator, and frontend in separate processes.
 
----
+## Run with Docker Compose
 
-## 🐳 Docker Compose Deployment
+From the repository root:
 
-Run the complete multi-container stack with one command:
-
-```bash
+```powershell
 docker compose up --build
 ```
-- **Backend:** `http://localhost:8000`
-- **Frontend Dashboard:** `http://localhost:5173`
-- **Log Generator:** Active background container streaming synthetic traffic
+
+Open the dashboard at `http://localhost:5173`. The API is at `http://localhost:8000`. Compose starts the simulator automatically and persists its log and baseline data under the local `data` directory.
+
+Stop the stack with `Ctrl+C`, or from another terminal run:
+
+```powershell
+docker compose down
+```
+
+## Simulator scenarios
+
+The dashboard provides controls for these running-simulator scenarios:
+
+| Scenario | Behavior |
+|---|---|
+| Normal | Continuous log stream with approximately 2% errors |
+| Spike | Raises the error ratio for a limited duration |
+| Gradual ramp | Increases the error ratio over time |
+| Traffic flood | Increases volume and error ratio |
+| Total outage | Raises the error ratio to 95% for a limited duration |
+| Recover | Clears the active scenario and returns to normal traffic |
+
+The simulator also supports a repeating flapping scenario from the command line; it alternates between calm and elevated error periods.
+
+The simulator can also be started with command-line options:
+
+```powershell
+python -m backend.simulator.generate_logs --help
+```
+
+It supports `--file`, `--rps`, `--base-error`, `--scenario`, `--at`, `--duration`, and `--error-ratio`. The backend and simulator must share the simulation control file for dashboard-triggered scenarios; the default is `data/sim_control.json`.
+
+## Configuration
+
+The backend reads settings from environment variables and an optional `.env` file in the working directory. Start from the checked-in template:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Common settings:
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `LOG_FILE_PATH` | `./data/app.log` | Log file monitored by the backend |
+| `LOG_FORMAT` | `auto` | Parser mode: `auto`, `text`, or `json` |
+| `WINDOW_SECONDS` | `60` | Rolling metric window |
+| `EVAL_INTERVAL_SEC` | `2.0` | Metric and detector evaluation interval |
+| `MIN_EVENTS_IN_WINDOW` | `20` | Minimum sample count before evaluation is reliable |
+| `BASELINE_WARMUP_SAMPLES` | `24` | Number of evaluations used to learn the baseline |
+| `FREEZE_BASELINE_DURING_ALERT` | `true` | Prevents active anomalies from being learned as normal |
+| `MIN_ABS_RATE` | `0.05` | Minimum error rate considered for an alert |
+| `Z_LOW` / `Z_MEDIUM` / `Z_HIGH` / `Z_CRITICAL` | `3` / `4.5` / `6.5` / `9` | Deviation thresholds for alert severity |
+| `CONFIRM_TICKS` / `RESOLVE_TICKS` | `2` / `3` | Consecutive evaluations to open or resolve an alert |
+| `PUBLISH_MODE` | `dry_run` | `dry_run` or `aws` |
+| `AWS_REGION` | `ap-south-1` | AWS region when AWS publishing is enabled |
+| `CW_LOG_GROUP` / `CW_LOG_STREAM` | `/hackathon/log-anomaly-detector` / `alerts` | CloudWatch destination |
+| `SNS_TOPIC_ARN` | unset | SNS topic for notifications |
+| `ENABLE_SIM` | `true` | Enables simulation control endpoints |
+| `SIM_CONTROL_PATH` | `./data/sim_control.json` | Shared simulator-control file |
+
+For AWS mode, configure AWS credentials using your normal AWS credential provider (such as the AWS CLI profile or environment) and set `PUBLISH_MODE=aws`. Set the CloudWatch destination and `SNS_TOPIC_ARN` as needed. The included infrastructure templates are in `infra/`.
+
+## API overview
+
+The FastAPI application exposes these main endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/health` | Health and pipeline status |
+| `GET` | `/api/config` | Active application configuration |
+| `GET` | `/api/metrics` | Recent metrics |
+| `GET` | `/api/alerts` | Alert history |
+| `GET` | `/api/alerts/active` | Active alerts |
+| `POST` | `/api/alerts/{alert_id}/ack` | Acknowledge an alert |
+| `GET` | `/api/logs/recent` | Recent parsed log events |
+| `GET` | `/api/poll` | Event polling fallback |
+| `POST` | `/api/sim/spike` | Trigger a simulator scenario |
+| `POST` | `/api/sim/recover` | Return simulator to normal traffic |
+| `POST` | `/api/reset` | Reset the detector state |
+| WebSocket | `/ws` | Live metrics, alerts, baseline, and log events |
+
+## Run tests
+
+From the repository root, install backend dependencies if you have not already, then run:
+
+```powershell
+pytest -q
+```
+
+The test suite covers parsing, tailing, the rolling window, baseline and detection, alert lifecycle, publishers, and end-to-end pipeline behavior.
+
+To verify the frontend production build:
+
+```powershell
+Set-Location frontend
+npm run build
+```
+
+## Project structure
+
+```text
+backend/
+  app/                 FastAPI application, pipeline, detector, APIs, publishers
+  simulator/           Application-log generator and scenario controls
+  tests/               Backend unit and integration tests
+data/
+  baseline.json        Persisted baseline state
+frontend/
+  src/                 React dashboard and components
+infra/                 AWS setup script and CloudFormation resources
+docker-compose.yml      Local multi-container setup
+start.ps1              Windows local launcher
+```
+
+## Safety and data notes
+
+- The simulator is intended for development and demonstrations; generated logs are synthetic.
+- The default publisher is `dry_run`. AWS publishing is optional and requires valid AWS permissions and configuration.
+- Keep real credentials in environment variables or a local `.env` file. Do not commit secrets.
+- `.env` and generated log files are excluded by `.gitignore`; `.env.example` contains non-secret defaults.
