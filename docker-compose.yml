@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: log-anomaly-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - LOG_FILE_PATH=/app/data/app.log
+      - BASELINE_PERSIST_PATH=/app/data/baseline.json
+      - PUBLISH_MODE=dry_run
+      - AWS_REGION=ap-south-1
+      - CORS_ORIGINS=*
+      - ENABLE_SIM=true
+      - SIM_CONTROL_PATH=/app/data/sim_control.json
+    restart: unless-stopped
+
+  simulator:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: log-anomaly-simulator
+    command: ["python", "-m", "backend.simulator.generate_logs", "--file", "/app/data/app.log", "--rps", "30", "--control-file", "/app/data/sim_control.json"]
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: log-anomaly-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  localstack:
+    image: localstack/localstack:latest
+    container_name: log-anomaly-localstack
+    profiles: ["aws-local"]
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=logs,sns
+      - DEFAULT_REGION=ap-south-1

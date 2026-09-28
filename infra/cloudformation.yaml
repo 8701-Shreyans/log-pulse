@@ -1,0 +1,50 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation Template for Log Anomaly Detector AWS Infrastructure'
+
+Parameters:
+  LogGroupName:
+    Type: String
+    Default: /hackathon/log-anomaly-detector
+    Description: Name of the CloudWatch Log Group
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: Optional email address to receive SNS alert notifications
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+
+Resources:
+  AnomalyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      RetentionInDays: 7
+
+  AnomalyLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref AnomalyLogGroup
+      LogStreamName: alerts
+
+  AnomalySnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: log-anomaly-alerts
+      DisplayName: Real-Time Log Anomaly Detector Alerts
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AnomalySnsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+Outputs:
+  LogGroupArn:
+    Description: ARN of CloudWatch Log Group
+    Value: !GetAtt AnomalyLogGroup.Arn
+  SnsTopicArn:
+    Description: ARN of SNS Topic
+    Value: !Ref AnomalySnsTopic
